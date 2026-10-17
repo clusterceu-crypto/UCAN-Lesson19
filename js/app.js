@@ -12,6 +12,11 @@ function read(k,fallback){try{const v=localStorage.getItem(k);return v===null?fa
 function save(k,v){try{localStorage.setItem(k,JSON.stringify(v));return true}catch(e){storeAvailable=false;return false}}
 function rm(k){try{localStorage.removeItem(k);return true}catch(e){storeAvailable=false;return false}}
 let page=read(key.route,0);if(!Number.isInteger(page)||page<0||page>7)page=0;
+const migrationKey=K+'route-v105-migrated';
+if(!read(migrationKey,false)){
+ page=({3:4,4:5,5:3})[page]??page;
+ save(key.route,page);save(migrationKey,true);
+}
 let checked=read(key.checked,false)===true;
 let answers=read(key.answers,{});if(typeof answers!=='object'||!answers)answers={};
 let formative=read(key.formative,{});if(typeof formative!=='object'||!formative)formative={};
@@ -52,9 +57,26 @@ function assessmentChanged(){
 for(const radio of document.querySelectorAll('.answer input'))radio.addEventListener('change',assessmentChanged);
 by('check-answers').addEventListener('click',()=>{checked=true;save(key.checked,true);redrawFeedback();refreshMap();});
 if(checked)redrawFeedback();else clearFeedback();validPass=pass();
-for(const button of document.querySelectorAll('.formative-trigger')){
- const id=button.dataset.formative;const target=by('formative-'+id);const initial=!!formative[id];target.hidden=!initial;button.setAttribute('aria-expanded',String(initial));button.textContent=initial?'Приховати орієнтир для самоперевірки':'Показати орієнтир для самоперевірки';
- button.addEventListener('click',()=>{const showing=target.hidden;target.hidden=!showing;formative[id]=showing;save(key.formative,formative);button.setAttribute('aria-expanded',String(showing));button.textContent=showing?'Приховати орієнтир для самоперевірки':'Показати орієнтир для самоперевірки';});
+// Non-gating formative choices: persist only selections, never pre-reveal feedback on load.
+for(const id of ['a','b']){
+ const group=document.querySelector(`fieldset[data-formative="${id}"]`);
+ const target=by('formative-'+id);
+ const stored=formative[id];
+ if(['А','Б','В'].includes(stored)){
+  const selected=group.querySelector(`input[value="${stored}"]`);if(selected)selected.checked=true;
+ }
+ group.querySelectorAll('input').forEach(radio=>radio.addEventListener('change',()=>{
+  formative[id]=radio.value;save(key.formative,formative);
+  target.hidden=true;target.textContent='';
+ }));
+ document.querySelector(`.formative-check[data-formative="${id}"]`).addEventListener('click',()=>{
+  const selection=group.querySelector('input:checked');
+  if(!selection){target.hidden=false;target.className='formative-feedback incorrect';target.textContent='Спочатку оберіть відповідь.';return;}
+  const correct=selection.value===C.formativeKeys[id];
+  target.className='formative-feedback '+(correct?'correct':'incorrect');
+  target.textContent=C.formativeFeedback[id][selection.value]+' Ви можете змінити відповідь і перевірити ще раз.';
+  target.hidden=false;
+ });
 }
 function refreshMap(){
  const currentPass=pass();for(const b of routeMap.querySelectorAll('button')){const i=Number(b.dataset.page);b.setAttribute('aria-current',i===page?'step':'false');b.setAttribute('aria-disabled',i===7&&!currentPass?'true':'false');}
@@ -68,9 +90,17 @@ function go(i,{force=false,restore=false}={}){
  const n=i+1,percent=Math.round(100*n/8);
  by('page-indicator').textContent=`Сторінка ${n} з 8`;by('sticky-page').textContent=`Сторінка ${n} з 8`;by('progress-percent').textContent=`${percent}%`;by('progress-fill').style.width=percent+'%';by('progressbar').setAttribute('aria-valuenow',percent);
  by('back-button').disabled=i===0;
- by('next-button').textContent=i===7?'Наступне заняття →':'Далі →';
- by('next-button').setAttribute('aria-label',i===7?'Наступне заняття — наразі недоступне':'Далі — '+(C.routeLabels[i+1]||''));
+ const next=by('next-button');
+ next.textContent=i===7?'Наступне заняття →':'Далі →';
+ next.disabled=false;
+ next.setAttribute('aria-label',i===7?`Перейти до наступного заняття ${C.courseNextNumber}`:'Далі — '+(C.routeLabels[i+1]||''));
+ next.removeAttribute('aria-describedby');
+ next.removeAttribute('title');
  refreshMap();save(key.route,i);
+ // Scroll only the horizontal tab-strip; never scroll the main document vertically.
+ const activeTab=routeMap.querySelector(`button[data-page="${i}"]`);
+ if(activeTab){const strip=routeMap.closest('.route-map');if(strip){const left=strip.scrollLeft+activeTab.getBoundingClientRect().left-strip.getBoundingClientRect().left;const target=Math.max(0,left-(strip.clientWidth-activeTab.offsetWidth)/2);strip.scrollTo({left:target,behavior:'instant'});}}
+
  if(!restore){window.scrollTo({top:0,behavior:'instant'});by('lesson-main').focus({preventScroll:true});announce(`Розділ ${n} із 8: ${label}.`)}
 }
 C.routeLabels.forEach((label,i)=>{
@@ -78,14 +108,21 @@ C.routeLabels.forEach((label,i)=>{
 });
 by('back-button').addEventListener('click',()=>go(page-1));
 by('next-button').addEventListener('click',()=>{
- if(page===7){announce('Перехід до наступного заняття наразі не налаштовано. Ваша нотатка і прогрес залишаються на пристрої.');return;}
+  if(page===7){
+   // Approved curriculum routing convention applies even if the next lesson is not yet published.
+   const target=C.courseNextUrl;
+   if(typeof target==='string'&&/^https:\/\/clusterceu-crypto\.github\.io\/UCAN-Lesson\d{2}\/$/.test(target)){
+    window.location.assign(target);return;
+   }
+   announce('Адресу наступного заняття задано некоректно. Зверніться до команди курсу.');return;
+  }
  go(page+1);
 });
 by('reset-lesson').addEventListener('click',()=>{
  if(!confirm('Почати заняття спочатку? Прогрес маршруту, самоперевірки та фінальні відповіді буде скинуто. Ваша нотатка «Портфеля мера» залишиться збереженою.'))return;
  for(const k of [key.route,key.answers,key.checked,key.formative])rm(k);
  answers={};checked=false;validPass=false;formative={};document.querySelectorAll('.answer input').forEach(e=>e.checked=false);clearFeedback();
- document.querySelectorAll('.formative-trigger').forEach(b=>{const e=by('formative-'+b.dataset.formative);e.hidden=true;b.textContent='Показати орієнтир для самоперевірки';b.setAttribute('aria-expanded','false')});
+ document.querySelectorAll('.formative-options input').forEach(e=>e.checked=false);document.querySelectorAll('.formative-feedback').forEach(e=>{e.hidden=true;e.textContent='';});
  go(0);announce('Прогрес заняття і відповіді скинуто. Нотатку «Портфеля мера» збережено.');
 });
 by('delete-note').addEventListener('click',()=>{
@@ -114,9 +151,21 @@ function makePdf(text){
  function wrapParagraph(raw,size,lead,after){
    if(!raw.trim()){cursor-=lead*.65;if(cursor<margin)newPage();return;}
    let line='';const max=pageW-2*margin;
-   for(const ch of [...raw]){
-    const trial=line+ch;
-    if(line&&textWidth(trial,size)>max){addLine(line.trimEnd(),size,lead);line=ch.trimStart();}else line=trial;
+   // Wrap at whole-word boundaries; break characters only for a single overwide token.
+   for(const token of (raw.match(/\S+|\s+/gu)||[])){
+    if(/^\s+$/u.test(token)){
+     if(line&&textWidth(line+token,size)<=max)line+=token;
+     else if(line){addLine(line.trimEnd(),size,lead);line='';}
+     continue;
+    }
+    if(textWidth(line+token,size)<=max){line+=token;continue;}
+    if(line.trim()){addLine(line.trimEnd(),size,lead);line='';}
+    if(textWidth(token,size)<=max){line=token;continue;}
+    // One unbroken token exceeds the page width: last-resort character wrap.
+    for(const ch of [...token]){
+     if(line&&textWidth(line+ch,size)>max){addLine(line,size,lead);line='';}
+     line+=ch;
+    }
    }
    if(line)addLine(line.trimEnd(),size,lead);cursor-=after;if(cursor<margin)newPage();
  }
@@ -184,6 +233,10 @@ function makePdf(text){
 by('download-pdf').addEventListener('click',()=>{
  const s=note.value.trim();if(!s){setSaveMessage('Нотатка порожня. Напишіть хоча б один рядок перед завантаженням PDF.',true);note.focus();return;}
  try{const pdf=makePdf(s);const u=URL.createObjectURL(pdf);const a=document.createElement('a');a.href=u;a.download='UCAN_Лідерська_рамка_кліматичної_візії_міста_Громада.pdf';a.hidden=true;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),3000);announce('PDF створено локально. Перевірте теку завантажень.');setSaveMessage('PDF сформовано на Вашому пристрої. Нотатка залишається доступною.');}catch(e){setSaveMessage('Не вдалося створити PDF. Скопіюйте нотатку в локальний документ і збережіть її вручну.',true);announce('Помилка формування PDF.');}
+});
+// L19 v1.0.12: scroll within the current route without changing route or learner state.
+by('back-to-top').addEventListener('click',()=>{
+ window.scrollTo({top:0,behavior:'instant'});
 });
 // Never allow an old stored completion to unlock the final route after answer edits.
 if(page===7&&!pass())page=6;
