@@ -65,3 +65,5 @@ L19 HTML v1.0.9 — owner-authorized editorial UX harmonization (2026-10-17)
 - Browser QA / mobile keyboard behavior remains open until verified in real browser.
 
 L19 v1.0.10 UI correction: sticky progress and eight-route map grouped in one compact sticky viewport-bound panel; single-row horizontal tab scrolling, active-route alignment via horizontal-only scrollTo; eight route-heading emoji are decorative aria-hidden spans. No academic content edits. js/content-data.js and embedded PNG unchanged. js/app.js modified only in go() to keep active route tab visible.
+
+L19 v1.0.13: optional AI19-02 R06 post-draft copy-time prompt from current #portfolio-note. Manual clipboard fallback; no automatic external submission or stored prompt history. Design authority Drive 1IlWVgZ0sv7UfYLeLwoE518eF_HX1C1mY. Model-output validation OPEN.
